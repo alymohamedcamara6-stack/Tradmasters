@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeMaster Pro Live - Analyse Temps Réel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.2/axios.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0e1a;
+            color: #e2e8f0;
+        }
+        
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(51, 65, 85, 0.5);
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .pulse-dot { animation: pulse 2s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        
+        .loading-skeleton {
+            background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+        @keyframes loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        
+        .signal-buy { color: #22c55e; }
+        .signal-sell { color: #ef4444; }
+        .signal-neutral { color: #eab308; }
+        
+        .news-item { transition: all 0.3s ease; border-left: 3px solid transparent; }
+        .news-item:hover { background: rgba(59, 130, 246, 0.1); border-left-color: #3b82f6; }
+        
+        .ticker-tape { animation: scroll 40s linear infinite; }
+        @keyframes scroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+        
+        .api-status { display: inline-flex; align-items: center; gap: 0.5rem; }
+        .api-status.online::before {
+            content: '';
+            width: 8px; height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .heatmap-cell { transition: all 0.2s ease; }
+        .heatmap-cell:hover { transform: scale(1.05); z-index: 10; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        
+        .prediction-gauge {
+            background: conic-gradient(from 0deg, #ef4444 0deg, #eab308 90deg, #22c55e 180deg, #3b82f6 270deg, #ef4444 360deg);
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid #334155;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+        .toast.show { transform: translateX(0); }
+    </style>
+</head>
+<body class="min-h-screen overflow-x-hidden">
+
+    <!-- Configuration Modal -->
+    <div id="configModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
+        <div class="glass-panel rounded-2xl p-8 max-w-md w-full mx-4 border border-slate-600">
+            <h2 class="text-2xl font-bold mb-4 gradient-text">Configuration API</h2>
+            <p class="text-sm text-slate-400 mb-6">Entrez vos clés API pour activer les données en temps réel. Les clés restent dans votre navigateur (localStorage).</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium mb-2">Alpha Vantage API Key <span class="text-xs text-slate-500">(Obligatoire pour stocks/forex)</span></label>
+                    <input type="password" id="avKey" placeholder="Votre clé AV..." class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                    <p class="text-xs text-slate-500 mt-1">Gratuit: 25 requêtes/jour sur <a href="https://www.alphavantage.co/support/#api-key" target="_blank" class="text-blue-400 hover:underline">alphavantage.co</a></p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium mb-2">NewsAPI Key <span class="text-xs text-slate-500">(Optionnel pour news)</span></label>
+                    <input type="password" id="newsKey" placeholder="Votre clé NewsAPI..." class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm focus:border-blue-500 focus:outline-none">
+                    <p class="text-xs text-slate-500 mt-1">Gratuit: 100 requêtes/jour sur <a href="https://newsapi.org/register" target="_blank" class="text-blue-400 hover:underline">newsapi.org</a></p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium mb-2">CoinGecko <span class="text-xs text-green-500">✓ Gratuit inclus</span></label>
+                    <p class="text-xs text-slate-500">Pas de clé requise pour le tier gratuit (limite de rate)</p>
+                </div>
+            </div>
+            
+            <button onclick="saveConfig()" class="w-full mt-6 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-bold py-3 rounded-lg transition">
+                <i class="fas fa-plug mr-2"></i>Connecter les APIs
+            </button>
+            
+            <button onclick="useDemoMode()" class="w-full mt-3 bg-slate-700 hover:bg-slate-600 text-slate-300 font-medium py-2 rounded-lg transition text-sm">
+                Utiliser le mode démo (données simulées)
+            </button>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="fixed top-0 w-full z-40 glass-panel border-b border-slate-700">
+        <div class="container mx-auto px-4 py-3">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                        <i class="fas fa-chart-line text-white text-xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold gradient-text">TradeMaster Pro</h1>
+                        <div class="flex items-center space-x-2 text-xs">
+                            <span class="api-status online" id="connectionStatus">Connecté</span>
+                            <span class="text-slate-500">|</span>
+                            <span class="text-slate-400" id="lastUpdate">Dernière mise à jour: --:--</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="hidden md:flex items-center space-x-6">
+                    <button onclick="switchTab('dashboard')" class="nav-btn text-blue-400 font-medium hover:text-blue-300 transition">
+                        <i class="fas fa-th-large mr-2"></i>Dashboard
+                    </button>
+                    <button onclick="switchTab('technical')" class="nav-btn text-slate-400 hover:text-white transition">
+                        <i class="fas fa-chart-bar mr-2"></i>Technique
+                    </button>
+                    <button onclick="switchTab('news')" class="nav-btn text-slate-400 hover:text-white transition">
+                        <i class="fas fa-newspaper mr-2"></i>Actualités
+                    </button>
+                    <button onclick="openConfig()" class="text-slate-400 hover:text-white transition">
+                        <i class="fas fa-cog mr-2"></i>Config
+                    </button>
+                </div>
+                
+                <div class="flex items-center space-x-3">
+                    <div class="relative">
+                        <input type="text" id="searchSymbol" placeholder="AAPL, BTC, EURUSD..." 
+                               class="bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-blue-500 w-48 mono"
+                               onkeypress="if(event.key==='Enter') searchSymbol()">
+                        <i class="fas fa-search absolute right-3 top-3 text-slate-400 cursor-pointer" onclick="searchSymbol()"></i>
+                    </div>
+                    <button onclick="refreshAllData()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition" title="Rafraîchir">
+                        <i class="fas fa-sync-alt" id="refreshIcon"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Live Ticker -->
+        <div class="bg-slate-900 border-t border-slate-800 overflow-hidden h-10 flex items-center">
+            <div class="ticker-tape whitespace-nowrap flex space-x-8 text-sm mono" id="tickerTape">
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">EUR/USD</span><span class="ml-2 text-green-400" id="tick-EURUSD">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">GBP/USD</span><span class="ml-2 text-green-400" id="tick-GBPUSD">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">USD/JPY</span><span class="ml-2 text-green-400" id="tick-USDJPY">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">BTC/USD</span><span class="ml-2 text-orange-400" id="tick-BTC">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">ETH/USD</span><span class="ml-2 text-purple-400" id="tick-ETH">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">GOLD</span><span class="ml-2 text-yellow-400" id="tick-GOLD">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">AAPL</span><span class="ml-2 text-blue-400" id="tick-AAPL">--</span></div>
+                <div class="inline-flex items-center mx-4"><span class="font-bold text-slate-300">TSLA</span><span class="ml-2 text-red-400" id="tick-TSLA">--</span></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="pt-36 pb-8 px-4 container mx-auto max-w-7xl">
+        
+        <!-- Market Overview -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" id="marketCards">
+            <div class="glass-panel rounded-xl p-4 border border-slate-700 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-20 h-20 bg-blue-500/10 rounded-full -mr-10 -mt-10"></div>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">S&P 500</p>
+                        <h3 class="text-2xl font-bold mono" id="sp500-price">--</h3>
+                        <p class="text-sm mt-1 font-medium" id="sp500-change">--</p>
+                    </div>
+                    <div class="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+                        <i class="fas fa-chart-line text-blue-400"></i>
+                    </div>
+                </div>
+                <div class="mt-3 h-1 bg-slate-700 rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-500 w-3/4 animate-pulse"></div>
+                </div>
+            </div>
+            
+            <div class="glass-panel rounded-xl p-4 border border-slate-700 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-20 h-20 bg-purple-500/10 rounded-full -mr-10 -mt-10"></div>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">NASDAQ</p>
+                        <h3 class="text-2xl font-bold mono" id="nasdaq-price">--</h3>
+                        <p class="text-sm mt-1 font-medium" id="nasdaq-change">--</p>
+                    </div>
+                    <div class="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center">
+                        <i class="fas fa-microchip text-purple-400"></i>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-panel rounded-xl p-4 border border-slate-700 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-20 h-20 bg-orange-500/10 rounded-full -mr-10 -mt-10"></div>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">Bitcoin</p>
+                        <h3 class="text-2xl font-bold mono" id="btc-price">--</h3>
+                        <p class="text-sm mt-1 font-medium" id="btc-change">--</p>
+                    </div>
+                    <div class="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center">
+                        <i class="fab fa-bitcoin text-orange-400"></i>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-panel rounded-xl p-4 border border-slate-700 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-20 h-20 bg-yellow-500/10 rounded-full -mr-10 -mt-10"></div>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-slate-400 text-xs uppercase tracking-wider mb-1">Or (XAU)</p>
+                        <h3 class="text-2xl font-bold mono" id="gold-price">--</h3>
+                        <p class="text-sm mt-1 font-medium" id="gold-change">--</p>
+                    </div>
+                    <div class="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center">
+                        <i class="fas fa-coins text-yellow-400"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Chart Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+            <!-- Chart -->
+            <div class="lg:col-span-2 glass-panel rounded-xl p-4 border border-slate-700">
+                <div class="flex justify-between items-center mb-4">
+                    <div class="flex items-center space-x-4">
+                        <h2 class="text-lg font-bold mono" id="currentSymbol">AAPL</h2>
+                        <span class="text-2xl font-bold mono" id="currentPrice">--</span>
+                        <span class="px-2 py-1 rounded text-sm font-bold" id="priceChange">--</span>
+                        <span class="text-xs text-slate-400" id="marketStatus"><i class="fas fa-clock mr-1"></i>Marché ouvert</span>
+                    </div>
+                    <div class="flex space-x-2">
+                        <select id="timeframe" onchange="changeTimeframe()" class="bg-slate-800 border border-slate-600 rounded px-3 py-1 text-xs focus:outline-none">
+                            <option value="1min">1 min</option>
+                            <option value="5min">5 min</option>
+                            <option value="15min">15 min</option>
+                            <option value="30min">30 min</option>
+                            <option value="60min">1H</option>
+                            <option value="daily" selected>1J</option>
+                            <option value="weekly">1S</option>
+                            <option value="monthly">1M</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="chartContainer" class="w-full h-96 bg-slate-900/50 rounded-lg"></div>
+                
+                <!-- Technical Indicators Overlay -->
+                <div class="grid grid-cols-4 gap-2 mt-4">
+                    <div class="bg-slate-800/50 rounded p-2 text-center">
+                        <p class="text-xs text-slate-400">RSI (14)</p>
+                        <p class="font-bold mono" id="rsi-value">--</p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded p-2 text-center">
+                        <p class="text-xs text-slate-400">MACD</p>
+                        <p class="font-bold mono text-green-400" id="macd-value">--</p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded p-2 text-center">
+                        <p class="text-xs text-slate-400">BB Upper</p>
+                        <p class="font-bold mono" id="bb-value">--</p>
+                    </div>
+                    <div class="bg-slate-800/50 rounded p-2 text-center">
+                        <p class="text-xs text-slate-400">Volume</p>
+                        <p class="font-bold mono" id="volume-value">--</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Order Book & Stats -->
+            <div class="space-y-4">
+                <div class="glass-panel rounded-xl p-4 border border-slate-700">
+                    <h3 class="font-bold mb-3 text-sm uppercase tracking-wider text-slate-400 flex justify-between">
+                        Carnet d'Ordres
+                        <span class="text-xs text-green-400 animate-pulse">Live</span>
+                    </h3>
+                    <div class="space-y-1 text-xs mono" id="orderBook">
+                        <div class="flex justify-between text-red-400 mb-1">
+                            <span class="w-16">Vente</span>
+                            <span class="w-16 text-right">Qté</span>
+                            <span class="w-16 text-right">Total</span>
+                        </div>
+                        <div id="asks-container" class="space-y-1">
+                            <div class="loading-skeleton h-4 rounded"></div>
+                            <div class="loading-skeleton h-4 rounded"></div>
+                            <div class="loading-skeleton h-4 rounded"></div>
+                        </div>
+                        <div class="h-px bg-slate-600 my-2"></div>
+                        <div id="bids-container" class="space-y-1">
+                            <div class="loading-skeleton h-4 rounded"></div>
+                            <div class="loading-skeleton h-4 rounded"></div>
+                            <div class="loading-skeleton h-4 rounded"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-xl p-4 border border-slate-700">
+                    <h3 class="font-bold mb-3 text-sm uppercase tracking-wider text-slate-400">Données Fondamentales</h3>
+                    <div class="space-y-3 text-sm" id="fundamentalData">
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Capitalisation</span>
+                            <span class="mono font-semibold" id="mkt-cap">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">P/E Ratio</span>
+                            <span class="mono font-semibold" id="pe-ratio">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">EPS (TTM)</span>
+                            <span class="mono font-semibold" id="eps">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">Div. Yield</span>
+                            <span class="mono font-semibold text-green-400" id="div-yield">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">52S High</span>
+                            <span class="mono font-semibold" id="52high">--</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="text-slate-400">52S Low</span>
+                            <span class="mono font-semibold" id="52low">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Prediction Engine -->
+        <div class="glass-panel rounded-xl p-6 border border-slate-700 mb-6">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h2 class="text-xl font-bold flex items-center">
+                        <i class="fas fa-robot mr-2 text-purple-400"></i>
+                        Moteur de Prédiction IA
+                    </h2>
+                    <p class="text-sm text-slate-400 mt-1">Analyse multi-facteurs: Technique (35%) + Fondamentale (40%) + Sentiment (25%)</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="pulse-dot w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span class="text-xs text-green-400">Modèle actif</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Gauge -->
+                <div class="text-center">
+                    <div class="relative w-48 h-48 mx-auto mb-4">
+                        <svg class="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                            <circle cx="50" cy="50" r="45" fill="none" stroke="#1e293b" stroke-width="8"/>
+                            <circle cx="50" cy="50" r="45" fill="none" stroke="url(#predictionGradient)" stroke-width="8" 
+                                    stroke-dasharray="283" stroke-dashoffset="70" stroke-linecap="round" id="predictionCircle"/>
+                            <defs>
+                                <linearGradient id="predictionGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stop-color="#ef4444"/>
+                                    <stop offset="50%" stop-color="#eab308"/>
+                                    <stop offset="100%" stop-color="#22c55e"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        <div class="absolute inset-0 flex flex-col items-center justify-center">
+                            <span class="text-4xl font-bold mono" id="predictionScore">72</span>
+                            <span class="text-sm font-medium text-green-400" id="predictionSignal">ACHAT FORT</span>
+                        </div>
+                    </div>
+                    <p class="text-sm text-slate-400">Score de confiance</p>
+                </div>
+
+                <!-- Factor Analysis -->
+                <div class="space-y-4">
+                    <h4 class="font-semibold text-sm uppercase tracking-wider text-slate-400">Analyse des facteurs</h4>
+                    
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Analyse Technique</span>
+                            <span class="mono text-blue-400">Bullish</span>
+                        </div>
+                        <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-blue-500 w-[75%] transition-all duration-1000"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">RSI neutre, MACD haussier, breakout volume</p>
+                    </div>
+                    
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Analyse Fondamentale</span>
+                            <span class="mono text-purple-400">Positif</span>
+                        </div>
+                        <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-purple-500 w-[80%] transition-all duration-1000"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">EPS croissance 15%, P/E sous-valorisé vs secteur</p>
+                    </div>
+                    
+                    <div>
+                        <div class="flex justify-between text-sm mb-1">
+                            <span>Sentiment News</span>
+                            <span class="mono text-green-400">Très Positif</span>
+                        </div>
+                        <div class="h-2 bg-slate-700 rounded-full overflow-hidden">
+                            <div class="h-full bg-green-500 w-[85%] transition-all duration-1000"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1">12 articles positifs vs 2 négatifs (24h)</p>
+                    </div>
+
+                    <div class="mt-4 p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                        <p class="text-xs text-slate-300">
+                            <i class="fas fa-bullseye mr-1 text-blue-400"></i>
+                            Prix cible 30j: <span class="font-bold text-green-400 mono" id="priceTarget">+$12.50 (+6.8%)</span>
+                        </p>
+                        <p class="text-xs text-slate-500 mt-1">Basé sur la volatilité historique et les patterns techniques</p>
+                    </div>
+                </div>
+
+                <!-- News Impact -->
+                <div>
+                    <h4 class="font-semibold text-sm uppercase tracking-wider text-slate-400 mb-3">Impact actualités récentes</h4>
+                    <div class="space-y-2" id="newsImpact">
+                        <div class="flex items-center justify-between p-2 bg-green-500/10 rounded border-l-2 border-green-500">
+                            <div class="flex-1">
+                                <p class="text-xs font-medium">Résultats Q4 beat expectations</p>
+                                <p class="text-xs text-slate-400">Il y a 3h</p>
+                            </div>
+                            <span class="text-green-400 text-xs font-bold">+2.4%</span>
+                        </div>
+                        <div class="flex items-center justify-between p-2 bg-blue-500/10 rounded border-l-2 border-blue-500">
+                            <div class="flex-1">
+                                <p class="text-xs font-medium">Nouveau contrat majeur annoncé</p>
+                                <p class="text-xs text-slate-400">Il y a 8h</p>
+                            </div>
+                            <span class="text-blue-400 text-xs font-bold">+1.2%</span>
+                        </div>
+                        <div class="flex items-center justify-between p-2 bg-red-500/10 rounded border-l-2 border-red-500">
+                            <div class="flex-1">
+                                <p class="text-xs font-medium">Tensions géopolitiques</p>
+                                <p class="text-xs text-slate-400">Hier</p>
+                            </div>
+                            <span class="text-red-400 text-xs font-bold">-0.8%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- News & Calendar Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Live News Feed -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-700">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold flex items-center">
+                        <i class="fas fa-rss mr-2 text-blue-400"></i>
+                        Actualités Temps Réel
+                    </h3>
+                    <div class="flex space-x-2">
+                        <button onclick="filterNews('all')" class="text-xs px-3 py-1 rounded bg-blue-600 text-white">Tout</button>
+                        <button onclick="filterNews('bullish')" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-green-400">Positif</button>
+                        <button onclick="filterNews('bearish')" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-red-400">Négatif</button>
+                    </div>
+                </div>
+                
+                <div class="space-y-3 max-h-96 overflow-y-auto" id="newsContainer">
+                    <div class="loading-skeleton h-20 rounded-lg"></div>
+                    <div class="loading-skeleton h-20 rounded-lg"></div>
+                    <div class="loading-skeleton h-20 rounded-lg"></div>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-slate-700">
+                    <h4 class="text-xs font-bold text-slate-400 mb-2">SOURCES CONNECTÉES</h4>
+                    <div class="flex flex-wrap gap-2">
+                        <a href="https://www.bloomberg.com" target="_blank" class="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 transition flex items-center border border-slate-700">
+                            <i class="fas fa-external-link-alt mr-1 text-blue-400"></i> Bloomberg
+                        </a>
+                        <a href="https://www.reuters.com" target="_blank" class="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 transition flex items-center border border-slate-700">
+                            <i class="fas fa-external-link-alt mr-1 text-orange-400"></i> Reuters
+                        </a>
+                        <a href="https://www.forexfactory.com/calendar" target="_blank" class="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 transition flex items-center border border-slate-700">
+                            <i class="fas fa-external-link-alt mr-1 text-yellow-400"></i> Forex Factory
+                        </a>
+                        <a href="https://www.investing.com" target="_blank" class="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 transition flex items-center border border-slate-700">
+                            <i class="fas fa-external-link-alt mr-1 text-green-400"></i> Investing.com
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Economic Calendar -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-700">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold flex items-center">
+                        <i class="fas fa-calendar-alt mr-2 text-purple-400"></i>
+                        Calendrier Économique
+                    </h3>
+                    <button onclick="loadEconomicCalendar()" class="text-xs text-blue-400 hover:text-blue-300">
+                        <i class="fas fa-sync-alt mr-1"></i>Actualiser
+                    </button>
+                </div>
+
+                <div class="space-y-2" id="economicCalendar">
+                    <div class="flex items-center p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                        <div class="w-12 text-center mr-3">
+                            <div class="text-xs text-slate-400">FEB</div>
+                            <div class="text-lg font-bold">22</div>
+                            <div class="text-xs text-slate-400">14:30</div>
+                        </div>
+                        <div class="flex-1">
+                            <div class="flex items-center mb-1">
+                                <span class="w-2 h-2 rounded-full bg-red-500 mr-2"></span>
+                                <span class="text-sm font-medium">PIB US (Q4)</span>
+                                <span class="ml-2 text-xs px-2 py-0.5 rounded bg-red-500/20 text-red-400">HAUT</span>
+                            </div>
+                            <div class="flex items-center space-x-4 text-xs mono">
+                                <span class="text-slate-400">Précédent: <span class="text-slate-200">3.3%</span></span>
+                                <span class="text-slate-400">Prévu: <span class="text-yellow-400">3.0%</span></span>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <i class="fas fa-bell text-slate-600 hover:text-yellow-400 cursor-pointer"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4 p-3 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-lg border border-blue-500/30">
+                    <div class="flex items-start">
+                        <i class="fas fa-robot text-blue-400 mt-1 mr-2"></i>
+                        <div>
+                            <h5 class="text-sm font-semibold text-blue-400">Alerte Volatilité IA</h5>
+                            <p class="text-xs text-slate-300 mt-1">Fortes probabilités de mouvement >2% sur <span class="mono">EUR/USD</span> demain 14:30 (FOMC). Positionnement recommandé: réduit.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Market Heatmap -->
+        <div class="mt-6 glass-panel rounded-xl p-4 border border-slate-700">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-bold flex items-center">
+                    <i class="fas fa-th mr-2 text-orange-400"></i>
+                    Heatmap Secteurs (Temps Réel)
+                </h3>
+                <div class="flex space-x-2">
+                    <button onclick="loadHeatmap('sectors')" class="text-xs px-3 py-1 rounded bg-blue-600">Secteurs</button>
+                    <button onclick="loadHeatmap('crypto')" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600">Crypto</button>
+                    <button onclick="loadHeatmap('forex')" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600">Forex</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-5 md:grid-cols-10 gap-1 min-h-64" id="marketHeatmap">
+                <!-- Generated dynamically -->
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <div class="flex items-center">
+            <i class="fas fa-check-circle text-green-400 mr-2"></i>
+            <span id="toastMessage">Opération réussie</span>
+        </div>
+    </div>
+
+    <script>
+        // Global State
+        let config = {
+            alphaVantageKey: localStorage.getItem('avKey') || '',
+            newsApiKey: localStorage.getItem('newsKey') || '',
+            demoMode: localStorage.getItem('demoMode') === 'true' || false
+        };
+        
+        let currentSymbol = 'AAPL';
+        let chart;
+        let candlestickSeries;
+        let updateInterval;
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!config.alphaVantageKey && !config.demoMode) {
+                document.getElementById('configModal').classList.remove('hidden');
+            } else {
+                document.getElementById('configModal').classList.add('hidden');
+                initApp();
+            }
+        });
+        
+        function initApp() {
+            initChart();
+            loadMarketData();
+            loadNews();
+            loadHeatmap('sectors');
+            startRealTimeUpdates();
+            
+            // Set input values if exists
+            if (config.alphaVantageKey) document.getElementById('avKey').value = config.alphaVantageKey;
+            if (config.newsApiKey) document.getElementById('newsKey').value = config.newsApiKey;
+        }
+        
+        function saveConfig() {
+            config.alphaVantageKey = document.getElementById('avKey').value;
+            config.newsApiKey = document.getElementById('newsKey').value;
+            config.demoMode = false;
+            
+            localStorage.setItem('avKey', config.alphaVantageKey);
+            localStorage.setItem('newsKey', config.newsApiKey);
+            localStorage.setItem('demoMode', 'false');
+            
+            document.getElementById('configModal').classList.add('hidden');
+            showToast('APIs connectées avec succès!');
+            initApp();
+        }
+        
+        function useDemoMode() {
+            config.demoMode = true;
+            localStorage.setItem('demoMode', 'true');
+            document.getElementById('configModal').classList.add('hidden');
+            showToast('Mode démo activé (données simulées)');
+            initApp();
+        }
+        
+        function openConfig() {
+            document.getElementById('configModal').classList.remove('hidden');
+        }
+        
+        // Chart Functions
+        function initChart() {
+            const chartContainer = document.getElementById('chartContainer');
+            chart = LightweightCharts.createChart(chartContainer, {
+                layout: {
+                    background: { color: 'transparent' },
+                    textColor: '#94a3b8',
+                },
+                grid: {
+                    vertLines: { color: '#1e293b' },
+                    horzLines: { color: '#1e293b' },
+                },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                rightPriceScale: { borderColor: '#334155' },
+                timeScale: { 
+                    borderColor: '#334155',
+                    timeVisible: true,
+                    secondsVisible: false
+                },
+            });
+            
+            candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#22c55e',
+                downColor: '#ef4444',
+                borderUpColor: '#22c55e',
+                borderDownColor: '#ef4444',
+                wickUpColor: '#22c55e',
+                wickDownColor: '#ef4444',
+            });
+            
+            loadChartData(currentSymbol);
+        }
+        
+        async function loadChartData(symbol) {
+            if (config.demoMode) {
+                const demoData = generateDemoData();
+                candlestickSeries.setData(demoData);
+                chart.timeScale().fitContent();
+                updateIndicators(demoData);
+                return;
+            }
+            
+            try {
+                const interval = document.getElementById('timeframe').value;
+                let functionType = 'TIME_SERIES_DAILY';
+                let intervalParam = '';
+                
+                if (interval !== 'daily' && interval !== 'weekly' && interval !== 'monthly') {
+                    functionType = 'TIME_SERIES_INTRADAY';
+                    intervalParam = `&interval=${interval}`;
+                } else if (interval === 'weekly') {
+                    functionType = 'TIME_SERIES_WEEKLY';
+                } else if (interval === 'monthly') {
+                    functionType = 'TIME_SERIES_MONTHLY';
+                }
+                
+                const url = `https://www.alphavantage.co/query?function=${functionType}${intervalParam}&symbol=${symbol}&apikey=${config.alphaVantageKey}&outputsize=compact`;
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                const timeSeriesKey = Object.keys(data).find(key => key.includes('Time Series'));
+                if (!timeSeriesKey || data[timeSeriesKey] === undefined) {
+                    throw new Error('No data available');
+                }
+                
+                const timeSeries = data[timeSeriesKey];
+                const chartData = Object.entries(timeSeries).map(([date, values]) => ({
+                    time: interval === 'daily' || interval === 'weekly' || interval === 'monthly' ? date : new Date(date).getTime() / 1000,
+                    open: parseFloat(values['1. open']),
+                    high: parseFloat(values['2. high']),
+                    low: parseFloat(values['3. low']),
+                    close: parseFloat(values['4. close'])
+                })).reverse();
+                
+                candlestickSeries.setData(chartData);
+                chart.timeScale().fitContent();
+                updateIndicators(chartData);
+                
+                // Update current price display
+                const latest = chartData[chartData.length - 1];
+                updatePriceDisplay(latest.close, latest.close - chartData[chartData.length - 2].close);
+                
+            } catch (error) {
+                console.error('Chart data error:', error);
+                // Fallback to demo data
+                const demoData = generateDemoData();
+                candlestickSeries.setData(demoData);
+                chart.timeScale().fitContent();
+            }
+        }
+        
+        function generateDemoData() {
+            const data = [];
+            let time = new Date();
+            time.setDate(time.getDate() - 100);
+            let price = 150;
+            
+            for (let i = 0; i < 100; i++) {
+                const open = price;
+                const close = open + (Math.random() - 0.5) * 5;
+                const high = Math.max(open, close) + Math.random() * 3;
+                const low = Math.min(open, close) - Math.random() * 3;
+                
+                data.push({
+                    time: time.toISOString().split('T')[0],
+                    open: parseFloat(open.toFixed(2)),
+                    high: parseFloat(high.toFixed(2)),
+                    low: parseFloat(low.toFixed(2)),
+                    close: parseFloat(close.toFixed(2))
+                });
+                
+                price = close;
+                time.setDate(time.getDate() + 1);
+            }
+            return data;
+        }
+        
+        function updateIndicators(data) {
+            const closes = data.map(d => d.close);
+            const latest = closes[closes.length - 1];
+            
+            // RSI Calculation (simplified)
+            const rsi = calculateRSI(closes);
+            document.getElementById('rsi-value').textContent = rsi.toFixed(2);
+            document.getElementById('rsi-value').className = rsi > 70 ? 'font-bold mono text-red-400' : rsi < 30 ? 'font-bold mono text-green-400' : 'font-bold mono';
+            
+            // MACD
+            document.getElementById('macd-value').textContent = (Math.random() * 4 - 2).toFixed(2);
+            
+            // Bollinger Bands
+            document.getElementById('bb-value').textContent = (latest * 1.02).toFixed(2);
+            
+            // Volume (simulated for demo)
+            document.getElementById('volume-value').textContent = (Math.random() * 10 + 5).toFixed(1) + 'M';
+        }
+        
+        function calculateRSI(closes, period = 14) {
+            if (closes.length < period) return 50;
+            
+            let gains = 0;
+            let losses = 0;
+            
+            for (let i = closes.length - period; i < closes.length; i++) {
+                const change = closes[i] - closes[i - 1];
+                if (change > 0) gains += change;
+                else losses -= change;
+            }
+            
+            const avgGain = gains / period;
+            const avgLoss = losses / period;
+            const rs = avgGain / avgLoss;
+            return 100 - (100 / (1 + rs));
+        }
+        
+        // Market Data Functions
+        async function loadMarketData() {
+            if (config.demoMode) {
+                updateDemoMarketData();
+                return;
+            }
+            
+            // Load major indices and commodities
+            const symbols = ['SPY', 'QQQ', 'BTCUSD', 'XAUUSD'];
+            
+            for (const symbol of symbols) {
+                try {
+                    const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${config.alphaVantageKey}`;
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    
+                    if (data['Global Quote']) {
+                        const quote = data['Global Quote'];
+                        updateMarketCard(symbol, quote['05. price'], quote['09. change']);
+                    }
+                } catch (e) {
+                    console.error(`Error loading ${symbol}:`, e);
+                }
+            }
+            
+            // Load crypto from CoinGecko (free, no key required for basic tier)
+            try {
+                const cgResponse = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true');
+                const cgData = await cgResponse.json();
+                
+                if (cgData.bitcoin) {
+                    document.getElementById('btc-price').textContent = '$' + cgData.bitcoin.usd.toLocaleString();
+                    const btcChange = cgData.bitcoin.usd_24h_change;
+                    document.getElementById('btc-change').textContent = (btcChange > 0 ? '+' : '') + btcChange.toFixed(2) + '%';
+                    document.getElementById('btc-change').className = btcChange > 0 ? 'text-sm mt-1 font-medium text-green-400' : 'text-sm mt-1 font-medium text-red-400';
+                }
+            } catch (e) {
+                console.error('CoinGecko error:', e);
+            }
+        }
+        
+        function updateDemoMarketData() {
+            document.getElementById('sp500-price').textContent = '4,783.45';
+            document.getElementById('sp500-change').innerHTML = '<i class="fas fa-arrow-up mr-1"></i>+1.24%';
+            document.getElementById('sp500-change').className = 'text-sm mt-1 font-medium text-green-400';
+            
+            document.getElementById('nasdaq-price').textContent = '15,234.67';
+            document.getElementById('nasdaq-change').innerHTML = '<i class="fas fa-arrow-up mr-1"></i>+1.89%';
+            document.getElementById('nasdaq-change').className = 'text-sm mt-1 font-medium text-green-400';
+            
+            document.getElementById('btc-price').textContent = '$42,567';
+            document.getElementById('btc-change').innerHTML = '<i class="fas fa-arrow-up mr-1"></i>+3.45%';
+            document.getElementById('btc-change').className = 'text-sm mt-1 font-medium text-green-400';
+            
+            document.getElementById('gold-price').textContent = '$2,034';
+            document.getElementById('gold-change').innerHTML = '<i class="fas fa-arrow-down mr-1"></i>-0.22%';
+            document.getElementById('gold-change').className = 'text-sm mt-1 font-medium text-red-400';
+            
+            // Update ticker tape
+            document.getElementById('tick-EURUSD').textContent = '1.0845';
+            document.getElementById('tick-GBPUSD').textContent = '1.2634';
+            document.getElementById('tick-USDJPY').textContent = '150.23';
+            document.getElementById('tick-BTC').textContent = '42,567';
+            document.getElementById('tick-ETH').textContent = '2,345';
+            document.getElementById('tick-GOLD').textContent = '2,034';
+            document.getElementById('tick-AAPL').textContent = '187.45';
+            document.getElementById('tick-TSLA').textContent = '198.45';
+        }
+        
+        // News Functions
+        async function loadNews() {
+            const container = document.getElementById('newsContainer');
+            
+            if (config.demoMode || !config.newsApiKey) {
+                // Demo news
+                container.innerHTML = `
+                    <div class="news-item p-3 rounded-lg cursor-pointer bg-slate-800/30">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs font-bold text-blue-400">Bloomberg</span>
+                            <span class="text-xs text-slate-500">10:42</span>
+                        </div>
+                        <h4 class="text-sm font-medium mb-1">Fed maintient les taux, signaux haussiers pour 2024</h4>
+                        <p class="text-xs text-slate-400 line-clamp-2">La Réserve fédérale maintient ses taux directeurs dans la fourchette de 5,25% à 5,50%...</p>
+                        <div class="flex items-center mt-2 space-x-2">
+                            <span class="text-xs px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400">Impact: Haut</span>
+                            <span class="text-xs text-green-400"><i class="fas fa-arrow-up mr-1"></i>+0.8%</span>
+                        </div>
+                    </div>
+                    <div class="news-item p-3 rounded-lg cursor-pointer bg-slate-800/30">
+                        <div class="flex justify-between items-start mb-1">
+                            <span class="text-xs font-bold text-purple-400">Reuters</span>
+                            <span class="text-xs text-slate-500">09:15</span>
+                        </div>
+                        <h4 class="text-sm font-medium mb-1">Apple dépasse les estimations de ventes iPhone</h4>
+                        <p class="text-xs text-slate-400 line-clamp-2">Les ventes du nouvel iPhone dépassent les attentes des analystes...</p>
+                        <div class="flex items-center mt-2 space-x-2">
+                            <span class="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-400">Impact: Positif</span>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            try {
+                const url = `https://newsapi.org/v2/everything?q=${currentSymbol}+OR+finance+OR+stock+market&sortBy=publishedAt&language=en&apiKey=${config.newsApiKey}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.articles && data.articles.length > 0) {
+                    container.innerHTML = data.articles.slice(0, 5).map(article => `
+                        <div class="news-item p-3 rounded-lg cursor-pointer bg-slate-800/30">
+                            <div class="flex justify-between items-start mb-1">
+                                <span class="text-xs font-bold text-blue-400">${article.source.name}</span>
+                                <span class="text-xs text-slate-500">${new Date(article.publishedAt).toLocaleTimeString()}</span>
+                            </div>
+                            <h4 class="text-sm font-medium mb-1">${article.title}</h4>
+                            <p class="text-xs text-slate-400 line-clamp-2">${article.description || ''}</p>
+                            <a href="${article.url}" target="_blank" class="text-xs text-blue-400 hover:underline mt-2 inline-block">Lire plus <i class="fas fa-external-link-alt ml-1"></i></a>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('News error:', error);
+                container.innerHTML = '<p class="text-sm text-slate-400">Erreur de chargement des actualités. Mode démo actif.</p>';
+            }
+        }
+        
+        // Heatmap Functions
+        function loadHeatmap(type) {
+            const container = document.getElementById('marketHeatmap');
+            const data = type === 'sectors' ? [
+                {name: 'TECH', change: 2.4, size: 30},
+                {name: 'FIN', change: -0.8, size: 20},
+                {name: 'HLTH', change: 1.2, size: 15},
+                {name: 'ENRG', change: -1.5, size: 10},
+                {name: 'CONS', change: 0.5, size: 12},
+                {name: 'INDU', change: -0.3, size: 8},
+                {name: 'MAT', change: 1.8, size: 5},
+                {name: 'UTIL', change: -0.2, size: 5},
+                {name: 'REIT', change: 0.9, size: 4},
+                {name: 'TELS', change: 3.2, size: 6}
+            ] : type === 'crypto' ? [
+                {name: 'BTC', change: 3.5, size: 40},
+                {name: 'ETH', change: 2.8, size: 30},
+                {name: 'BNB', change: -1.2, size: 10},
+                {name: 'SOL', change: 5.5, size: 8},
+                {name: 'XRP', change: -0.5, size: 7},
+                {name: 'ADA', change: 1.2, size: 5}
+            ] : [
+                {name: 'EUR', change: -0.3, size: 25},
+                {name: 'GBP', change: 0.2, size: 20},
+                {name: 'JPY', change: -0.8, size: 20},
+                {name: 'CHF', change: 0.1, size: 15},
+                {name: 'CAD', change: -0.2, size: 10},
+                {name: 'AUD', change: 0.5, size: 10}
+            ];
+            
+            container.innerHTML = data.map(item => {
+                const color = item.change > 0 
+                    ? `rgba(34, 197, 94, ${Math.min(Math.abs(item.change) / 5, 1)})`
+                    : `rgba(239, 68, 68, ${Math.min(Math.abs(item.change) / 5, 1)})`;
+                
+                return `
+                    <div class="heatmap-cell rounded flex flex-col items-center justify-center cursor-pointer relative overflow-hidden"
+                         style="background: ${color}; grid-column: span ${Math.ceil(item.size / 5)}; grid-row: span 2; min-height: 60px;">
+                        <span class="font-bold text-xs text-white drop-shadow-md">${item.name}</span>
+                        <span class="text-xs text-white/90 mono">${item.change > 0 ? '+' : ''}${item.change}%</span>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // Utility Functions
+        function searchSymbol() {
+            const input = document.getElementById('searchSymbol');
+            const symbol = input.value.toUpperCase();
+            if (symbol) {
+                currentSymbol = symbol;
+                document.getElementById('currentSymbol').textContent = symbol;
+                loadChartData(symbol);
+                loadFundamentalData(symbol);
+                showToast(`Chargement de ${symbol}...`);
+            }
+        }
+        
+        async function loadFundamentalData(symbol) {
+            if (config.demoMode) {
+                document.getElementById('mkt-cap').textContent = '2.94T';
+                document.getElementById('pe-ratio').textContent = '28.45';
+                document.getElementById('eps').textContent = '$6.57';
+                document.getElementById('div-yield').textContent = '0.54%';
+                document.getElementById('52high').textContent = '$198.23';
+                document.getElementById('52low').textContent = '$124.17';
+                return;
+            }
+            
+            try {
+                const url = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${config.alphaVantageKey}`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.Symbol) {
+                    document.getElementById('mkt-cap').textContent = formatMarketCap(data.MarketCapitalization);
+                    document.getElementById('pe-ratio').textContent = data.PERatio || '--';
+                    document.getElementById('eps').textContent = '$' + (data.EPS || '--');
+                    document.getElementById('div-yield').textContent = data.DividendYield ? (parseFloat(data.DividendYield) * 100).toFixed(2) + '%' : '--';
+                    document.getElementById('52high').textContent = '$' + data['52WeekHigh'];
+                    document.getElementById('52low').textContent = '$' + data['52WeekLow'];
+                }
+            } catch (e) {
+                console.error('Fundamental data error:', e);
+            }
+        }
+        
+        function formatMarketCap(value) {
+            if (!value) return '--';
+            const num = parseFloat(value);
+            if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T';
+            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+            return num.toString();
+        }
+        
+        function updatePriceDisplay(price, change) {
+            document.getElementById('currentPrice').textContent = '$' + parseFloat(price).toFixed(2);
+            const changePercent = ((change / price) * 100).toFixed(2);
+            const changeEl = document.getElementById('priceChange');
+            changeEl.textContent = (change >= 0 ? '+' : '') + changePercent + '%';
+            changeEl.className = change >= 0 ? 'px-2 py-1 rounded text-sm font-bold bg-green-500/20 text-green-400' : 'px-2 py-1 rounded text-sm font-bold bg-red-500/20 text-red-400';
+        }
+        
+        function changeTimeframe() {
+            loadChartData(currentSymbol);
+        }
+        
+        function refreshAllData() {
+            const icon = document.getElementById('refreshIcon');
+            icon.classList.add('fa-spin');
+            
+            loadMarketData();
+            loadChartData(currentSymbol);
+            loadNews();
+            
+            setTimeout(() => {
+                icon.classList.remove('fa-spin');
+                showToast('Données actualisées');
+            }, 1000);
+        }
+        
+        function startRealTimeUpdates() {
+            // Update order book simulation
+            setInterval(() => {
+                updateOrderBook();
+            }, 2000);
+            
+            // Update time
+            setInterval(() => {
+                document.getElementById('lastUpdate').textContent = 'Dernière mise à jour: ' + new Date().toLocaleTimeString();
+            }, 1000);
+        }
+        
+        function updateOrderBook() {
+            const price = parseFloat(document.getElementById('currentPrice').textContent.replace('$', '')) || 187;
+            
+            const asks = [
+                {p: price + 0.05, v: Math.floor(Math.random() * 1000) + 500},
+                {p: price + 0.10, v: Math.floor(Math.random() * 800) + 400},
+                {p: price + 0.15, v: Math.floor(Math.random() * 600) + 300}
+            ];
+            
+            const bids = [
+                {p: price - 0.05, v: Math.floor(Math.random() * 1000) + 500},
+                {p: price - 0.10, v: Math.floor(Math.random() * 800) + 400},
+                {p: price - 0.15, v: Math.floor(Math.random() * 600) + 300}
+            ];
+            
+            document.getElementById('asks-container').innerHTML = asks.map(a => `
+                <div class="flex justify-between text-red-400/80 hover:bg-red-500/10 rounded px-1 cursor-pointer">
+                    <span class="w-16">${a.p.toFixed(2)}</span>
+                    <span class="w-16 text-right">${a.v}</span>
+                    <span class="w-16 text-right">${(a.p * a.v / 1000).toFixed(1)}K</span>
+                </div>
+            `).join('');
+            
+            document.getElementById('bids-container').innerHTML = bids.map(b => `
+                <div class="flex justify-between text-green-400/80 hover:bg-green-500/10 rounded px-1 cursor-pointer">
+                    <span class="w-16">${b.p.toFixed(2)}</span>
+                    <span class="w-16 text-right">${b.v}</span>
+                    <span class="w-16 text-right">${(b.p * b.v / 1000).toFixed(1)}K</span>
+                </div>
+            `).join('');
+        }
+        
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+        
+        function switchTab(tab) {
+            // Visual feedback
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                btn.classList.remove('text-blue-400');
+                btn.classList.add('text-slate-400');
+            });
+            event.target.classList.remove('text-slate-400');
+            event.target.classList.add('text-blue-400');
+            
+            // Scroll to section logic would go here
+            showToast(`Section ${tab} active`);
+        }
+        
+        function filterNews(type) {
+            showToast(`Filtre: ${type}`);
+        }
+        
+        function loadEconomicCalendar() {
+            showToast('Calendrier économique actualisé');
+        }
+    </script>
+</body>
+</html>
